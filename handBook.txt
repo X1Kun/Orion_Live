@@ -1,0 +1,9 @@
+GET /api/v1/feed
+POST /api/v1/users/register
+POST /api/v1/users/login
+
+Au
+GET /api/v1/profile
+POST /api/v1/videos
+POST /api/v1/videos/1/like
+DELETE /api/v1/videos/1/like
