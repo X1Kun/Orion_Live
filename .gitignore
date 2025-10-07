@@ -1,4 +1,7 @@
-# Binaries for programs and plugins
+# .gitignore
+
+## Go Binaries
+# Compiled executables
 *.exe
 *.exe~
 *.dll
@@ -11,11 +14,36 @@
 # Output of the go coverage tool, specifically when run with the -o option
 *.out
 
-# IDE and Editor files
+# The compiled application binary itself (assuming your output is named 'orion_live')
+orion_live
+
+
+## Go Dependencies
+# Do not commit the vendor directory. It's better to rely on go.mod.
+/vendor/
+
+
+## Log files
+# Ignore all log files
+*.log
+
+
+## Config
+# Ignore environment variables file
+.env
+
+
+## IDE / Editor
+# VSCode, GoLand, Vim, etc.
 .vscode/
 .idea/
 *.swp
 *~
 
-# Environment variables
-.env
+
+## OS Generated Files
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db

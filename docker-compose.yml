@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: orion_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: zhengxikun
+      MYSQL_DATABASE: orion_live
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  redis:
+    image: redis:7.0-alpine
+    container_name: orion_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  rabbitmq:
+    image: rabbitmq:3.11-management-alpine
+    container_name: orion_rabbitmq
+    restart: always
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    ports:
+      - "5672:5672"   # 客户端连接端口
+      - "15672:15672" # 管理后台UI端口
+
+volumes:
+  mysql_data:
+  redis_data:
