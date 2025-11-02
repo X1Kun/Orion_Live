@@ -1,65 +1,157 @@
-// attack_script.js - "黄金席位"并发攻击脚本
-
 import http from 'k6/http';
-import { check, sleep } from 'k6';
+import ws from 'k6/ws';
+import { check, sleep, group } from 'k6';
 
-// --- 攻击参数配置 ---
+// ========== 配置部分 ==========
 export const options = {
-  // 让我们用 500 个并发用户来攻击！
-  vus: 500, 
-  duration: '30s', 
+  scenarios: {
+    // HTTP压测：登录、发视频、发黄金评论
+    http_scenario: {
+      executor: 'constant-vus',
+      exec: 'httpScenario',
+      vus: 100, // 并发用户数
+      duration: '30s',
+    },
+    // WebSocket压测：聊天室弹幕
+    ws_scenario: {
+      executor: 'constant-vus',
+      exec: 'wsScenario',
+      vus: 50, // 并发连接数
+      duration: '30s',
+      startTime: '5s', // 延迟5秒启动，避免和HTTP抢资源
+    },
+  },
+  thresholds: {
+    http_req_duration: ['p(95)<800'], // 95%的请求小于800ms
+  },
 };
 
-// --- 攻击前准备阶段 (setup) ---
-// 这个函数只在测试开始时执行一次，用来获取我们需要的“身份凭证”。
-export function setup() {
-  // 1. 登录以获取JWT令牌
-  const loginRes = http.post('http://localhost:8080/api/v1/users/login', 
-    JSON.stringify({
-      username: 'testuser', // 假设你已注册了一个名为 'testuser' 的用户
-      password: 'password123',
-    }),
-    { headers: { 'Content-Type': 'application/json' } }
-  );
-  
-  // 从登录响应中提取JWT令牌
-  const token = loginRes.json('data.token');
-  return { authToken: token }; // 将令牌传递给主攻击阶段
+// ========== 基础配置 ==========
+const BASE_URL = 'http://localhost:8080/api/v1';
+const WS_BASE_URL = 'ws://localhost:8080/api/v1/ws/videos';
+
+// ========== 工具函数 ==========
+function randomString(length) {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return result;
 }
 
+// ========== 场景1：HTTP 压测 ==========
+export function httpScenario() {
+  let authToken = ''; // 将 token 提升到顶层作用域  
+  let createdVideoID = 0;
 
-// --- 主攻击阶段 (default function) ---
-// 每个虚拟用户(VU)会不断重复执行这个函数。
-export default function (data) {
-  // 目标视频ID (请替换成您自己创建的视频ID)
-  const VIDEO_ID = '500'; 
+  group('1️⃣ 用户注册 + 登录', () => {
+    const username = `user_${__VU}_${randomString(4)}`;
+    const password = 'password123';
 
-  const url = `http://localhost:8080/api/v1/videos/${VIDEO_ID}/golden_comment`;
+    // 注册
+    const registerRes = http.post(`${BASE_URL}/users/register`, JSON.stringify({
+      username, password,
+    }), { headers: { 'Content-Type': 'application/json' } });
 
-  // 模拟每个用户发送不同的评论内容
-  const payload = JSON.stringify({
-    // `__VU`: k6内置变量，代表当前虚拟用户的ID
-    content: `我是攻击者 #${__VU}，来抢黄金席位了!`, 
+    check(registerRes, {
+      '注册成功 (201 or 200)': (r) => r.status === 201 || r.status === 200,
+    });
+
+    // 登录
+    const loginRes = http.post(`${BASE_URL}/users/login`, JSON.stringify({
+      username, password,
+    }), { headers: { 'Content-Type': 'application/json' } });
+
+    check(loginRes, {
+      '登录成功 (200)': (r) => r.status === 200,
+      '返回token': (r) => r.json('token') !== '',
+    });
+
+    if (loginRes.status === 200 && loginRes.body) {
+      const loginBody = loginRes.json();
+      // 使用可选链 ?. 确保即使 data 或 token 不存在也不会报错
+      authToken = loginBody?.data?.token || ''; 
+    }
+    check(authToken, { '成功提取到非空Token': (t) => t.length > 0 });
+    sleep(0.5);
+
+
+    group('2️⃣ 发布视频 + 黄金评论', () => {
+      const videoPayload = JSON.stringify({
+        title: `My Test Video by ${username}`,
+        description: '压测视频上传',
+        video_url: 'https://placeholder.com/video.mp4',
+        cover_url: 'https://placeholder.com/cover.jpg',
+      });
+
+      const videoRes = http.post(`${BASE_URL}/videos`, videoPayload, {
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      check(videoRes, {
+        '视频发布成功': (r) => r.status === 201,
+      });
+      // 先将整个 JSON 响应体完整地解析成一个 JavaScript 对象，然后再用标准的 JavaScript 语法去访问这个对象的嵌套属性，从而精确地提取出了我们需要的 id
+      // 【关键修复】使用和Token一样的精确解析方法来获取videoId
+    if (videoRes.status === 201 && videoRes.body) {
+        const videoBody = videoRes.json();
+        createdVideoID = videoBody?.data?.id || 0;
+    }
+
+      const goldenPayload = JSON.stringify({
+        content: `黄金评论 by ${username}`,
+      });
+
+      const goldenRes = http.post(`${BASE_URL}/videos/${createdVideoID}/golden_comment`, goldenPayload, {
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      check(goldenRes, {
+        '黄金评论发布成功 (201)': (r) => r.status === 201,
+      });
+    });
   });
 
-  const params = {
-    headers: {
-      'Content-Type': 'application/json',
-      // 在请求头中带上我们的“身份凭证”
-      'Authorization': `Bearer ${data.authToken}`, 
-    },
-  };
+  sleep(1);
+}
 
-  // 发起POST请求，攻击开始！
-  const res = http.post(url, payload, params);
+// ========== 场景2：WebSocket 压测 ==========
+export function wsScenario() {
+  const videoId = Math.floor(Math.random() * 50) + 1; // 随机选一个视频
+  const url = `${WS_BASE_URL}/${videoId}`;
 
-  // --- 战果分析 (Checks) ---
-  // 检查我们的攻击是否达到了预期的效果
-  check(res, {
-    '成功抢到席位 (HTTP 201)': (r) => r.status === 201,
-    '被系统拒绝 (HTTP 400/500)': (r) => r.status === 400 || r.status === 500,
+  const res = ws.connect(url, {}, function (socket) {
+    socket.on('open', function () {
+      console.log(`VU ${__VU} connected to video ${videoId}`);
+      socket.send(`Hello from user_${__VU}`);
+    });
+
+    socket.on('message', function (msg) {
+      console.log(`VU ${__VU} received: ${msg}`);
+    });
+
+    socket.on('close', function () {
+      console.log(`VU ${__VU} disconnected`);
+    });
+
+    // 模拟发送多条消息
+    for (let i = 0; i < 3; i++) {
+      socket.send(`弹幕 ${i} from user_${__VU}`);
+      sleep(1);
+    }
+
+    // 在线5秒后断开
+    socket.setTimeout(function () {
+      socket.close();
+    }, 5000);
   });
 
-  // 短暂休息一下，模拟真实用户的间隔
-  sleep(1); 
+  check(res, { 'WebSocket 连接成功 (101)': (r) => r && r.status === 101 });
 }

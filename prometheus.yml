@@ -1,0 +1,29 @@
+# 全局配置，对所有job生效
+global:
+  # 每15秒抓取一次
+  scrape_interval: 15s 
+
+# 抓取配置列表。每个 "-" 代表一个独立的抓取任务或“工作”(job)
+scrape_configs:
+  # 作为`job="orion-live"`标签附加到所有从这个job抓取的指标上
+  - job_name: 'orion-live'
+    # 手动静态配置
+    static_configs:
+      # 目标列表。'api-server'是docker-compose.yml中定义的服务名，Docker的内部DNS会将其解析为Go应用的容器IP
+      # Prometheus会去请求 http://api-server:8080/metrics
+      - targets: ['api-server:8080'] 
+      
+  - job_name: 'mysql'
+    static_configs:
+      # 抓取MySQL Exporter暴露的指标
+      - targets: ['mysql-exporter:9104'] # exporter默认端口是9104
+      
+  - job_name: 'redis'
+    static_configs:
+      # 抓取Redis Exporter暴露的指标
+      - targets: ['redis-exporter:9121']
+
+  - job_name: 'rabbitmq'
+    static_configs:
+      # 抓取RabbitMQ Exporter暴露的指标
+      - targets: ['rabbitmq-exporter:9419']

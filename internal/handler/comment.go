@@ -148,7 +148,7 @@ func (h *commentHandler) CreateGoldenForVideo(c *gin.Context) {
 		return
 	}
 	// 查找videoID的存在性
-	_, err = h.VideoRepo.FindByID(videoID)
+	video, err := h.VideoRepo.FindByID(videoID)
 	if err != nil {
 		sendErrorResponse(c, http.StatusNotFound, "视频不存在")
 		return
@@ -173,10 +173,20 @@ func (h *commentHandler) CreateGoldenForVideo(c *gin.Context) {
 	// 正式进入业务前，将logger格式整理好
 	logCtx := logger.Log.WithField("user_id", userID).WithField("video_id", videoID)
 	logCtx.Info("开始创建黄金评论！")
-	comment, err := h.CommentService.CreateGoldenComment(userID, videoID, req.Content)
+	comment, err := h.CommentService.CreateGoldenComment(userID, video, req.Content)
 	if err != nil {
-		logCtx.WithError(err).Error("创建黄金评论失败")
-		sendErrorResponse(c, http.StatusInternalServerError, "评论失败") // 500
+		// 根据错误类型，返回不同的HTTP状态码
+		errMsg := err.Error()
+		switch errMsg {
+		case "黄金评论席已满", "黄金评论席抢占已超时":
+			// 业务逻辑错误，是客户端的问题，返回400
+			logCtx.Warnf("创建黄金评论业务失败: %s", errMsg)
+			sendErrorResponse(c, http.StatusBadRequest, errMsg)
+		default:
+			// 其他错误（Redis挂了、MQ挂了），才是真正的服务器内部错误，返回500
+			logCtx.WithError(err).Error("创建黄金评论时发生内部错误")
+			sendErrorResponse(c, http.StatusInternalServerError, "评论失败，请稍后重试")
+		}
 		return
 	}
 	commentResponse := dto.ToCommentResponse(comment)
