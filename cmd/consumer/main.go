@@ -5,13 +5,15 @@ import (
 	"Orion_Live/internal/model"
 	"Orion_Live/internal/repository"
 	"Orion_Live/pkg/logger"
+	my "Orion_Live/pkg/mysql"
 	"Orion_Live/pkg/rabbitmq"
 	"encoding/json"
 	"errors"
+	"log"
+	"sync"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/streadway/amqp"
-	gorm_mysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -37,12 +39,12 @@ type GoldenCommentMessage struct {
 func main() {
 	logger.InitLogger()
 
-	// 连接数据库
-	dsn := "root:zhengxikun@tcp(127.0.0.1:3306)/orion_live?charset=utf8mb4&parseTime=True&loc=Local"
-	db, err := gorm.Open(gorm_mysql.Open(dsn), &gorm.Config{})
+	// 初始化数据库
+	db, err := my.InitMySQL()
 	if err != nil {
-		logger.Log.Fatalf("消费者无法连接到数据库: %v", err)
+		log.Fatalf("无法初始化数据库: %v", err)
 	}
+	logger.Log.Info("数据库连接成功")
 	// 连接RabbitMQ
 	rabbitMQConn, err := rabbitmq.InitRabbitMQ()
 	if err != nil {
@@ -55,9 +57,22 @@ func main() {
 	videoRepo := repository.NewVideoRepository(db, nil)
 	commentRepo := repository.NewCommentRepository(db)
 	uow := data.NewUnitOfWork(db, videoRepo, commentRepo)
-	// 开始消费消息
-	consumeLikes(rabbitMQConn, db, likeRepo, videoRepo)
-	consumeGoldenComments(rabbitMQConn, db, commentRepo, uow)
+
+	var wg sync.WaitGroup
+	forever := make(chan bool)
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		consumeLikes(rabbitMQConn, db, likeRepo, videoRepo)
+	}()
+	go func() {
+		defer wg.Done()
+		consumeGoldenComments(rabbitMQConn, db, commentRepo, uow)
+	}()
+	logger.Log.Info("所有消费者正在启动...")
+
+	<-forever
 }
 
 // like消息队列消费者：1、通过mq的TCP连接创建channel 2、通过ch注册消费者 3、利用无缓冲通道持续消费like消息 4、处理消息，repo负责增/删like关系，并对mq中的消息进行安全管理

@@ -10,6 +10,8 @@ type VideoResponse struct {
 	CreatedAt   time.Time `json:"created_at"`
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
+	LikeCount   uint64    `json:"like_count"`
+	GoldenCount uint64    `json:"golden_count"`
 	VideoURL    string    `json:"video_url"`
 	CoverURL    string    `json:"cover_url"`
 	Author      struct {  // 在这里定义了Author的精确形状
@@ -25,6 +27,8 @@ func ToVideoResponse(video *model.Video) VideoResponse {
 		CreatedAt:   video.CreatedAt,
 		Title:       video.Title,
 		Description: video.Description,
+		LikeCount:   video.LikeCount,
+		GoldenCount: video.GoldenCount,
 		VideoURL:    video.VideoURL,
 		CoverURL:    video.CoverURL,
 	}

@@ -7,6 +7,7 @@ import (
 	"Orion_Live/pkg/logger"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/streadway/amqp"
@@ -26,10 +27,10 @@ type GoldenCommentMessage struct {
 type CommentService interface {
 	// 创建视频的一级评论
 	CreateComment(userID, videoID uint64, content string) (*model.Comment, error)
-	// 创建视频的一级评论
+	// 创建视频的二级评论
 	CreateReply(userID uint64, parentComment *model.Comment, content string) (*model.Comment, error)
-
-	CreateGoldenComment(userID, videoID uint64, content string) (*model.Comment, error)
+	// 创建黄金评论
+	CreateGoldenComment(userID uint64, video *model.Video, content string) (*model.Comment, error)
 	// 获取一个视频的所有评论
 	GetComments(videoID uint64, page, pageSize int) ([]model.Comment, map[uint64][]*model.Comment, error)
 }
@@ -101,32 +102,36 @@ func (s *commentService) CreateReply(userID uint64, parentComment *model.Comment
 	return s.commentRepo.FindByID(newReply.ID)
 }
 
-// 创建黄金评论：1、先利用videoID在redis中抢占席位，返回现在的黄金评论数 2、判断席位数，如果超限，则返回归还席位 3、满足则构建消息，并发送消息至rabbitMQ
-func (s *commentService) CreateGoldenComment(userID, videoID uint64, content string) (*model.Comment, error) {
+// 创建黄金评论： 1、使用Handler传入的video对象进行业务逻辑（时间）判断 2、利用videoID在redis中抢占席位，返回现在的黄金评论数 3、判断席位数，如果超限，则返回归还席位 4、满足则构建消息，并发送消息至rabbitMQ
+func (s *commentService) CreateGoldenComment(userID uint64, video *model.Video, content string) (*model.Comment, error) {
 
-	count, err := s.videoRepo.IncrementGoldenCount_Redis(videoID)
+	if time.Since(video.CreatedAt) > 10*time.Minute {
+		return nil, errors.New("黄金评论席抢占已超时")
+	}
+	count, err := s.videoRepo.IncrementGoldenCount_Redis(video.ID)
 	if err != nil {
 		return nil, errors.New("系统繁忙，请稍后再试 (Redis错误)")
 	}
 	// 判断抢占结果
 	if count > 100 {
 		// 席位已满，需要执行“补偿”操作，把刚刚多加的那个数减回去
-		_ = s.videoRepo.DecrementGoldenCount_Redis(videoID)
+		_ = s.videoRepo.DecrementGoldenCount_Redis(video.ID)
 		return nil, errors.New("黄金评论席已满")
 	}
+
 	// 发送异步消息到 RabbitMQ
 	msg := GoldenCommentMessage{
 		UserID:  userID,
-		VideoID: videoID,
+		VideoID: video.ID,
 		Content: content,
 	}
 	if err := s.publishGoldenCommentMessage(msg); err != nil {
 		// 这是最严重的错误：Redis 已经扣了库存，但消息没发出去
 		// 必须补偿Redis，并记录严重错误日志以供人工排查
-		_ = s.videoRepo.DecrementGoldenCount_Redis(videoID)
+		_ = s.videoRepo.DecrementGoldenCount_Redis(video.ID)
 		logger.Log.WithError(err).
 			WithField("user_id", userID).
-			WithField("video_id", videoID).
+			WithField("video_id", video.ID).
 			Error("【严重】黄金评论消息投递失败！Redis库存已扣减，需人工核对！")
 		return nil, errors.New("系统错误，评论失败")
 	}
@@ -134,9 +139,10 @@ func (s *commentService) CreateGoldenComment(userID, videoID uint64, content str
 	// 发送成功！返回一个临时Comment对象给前端，用于“乐观UI”
 	tempComment := &model.Comment{
 		UserID:   userID,
-		VideoID:  videoID,
+		VideoID:  video.ID,
 		Content:  content,
 		IsGolden: true,
+		User:     model.User{BaseModel: model.BaseModel{ID: userID}},
 	}
 
 	return tempComment, nil

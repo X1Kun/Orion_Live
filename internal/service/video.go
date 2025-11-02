@@ -3,6 +3,7 @@ package service
 import (
 	"Orion_Live/internal/model"
 	"Orion_Live/internal/repository"
+	"Orion_Live/pkg/logger"
 	"fmt"
 
 	"github.com/go-redis/redis/v8"
@@ -62,7 +63,7 @@ func (s *videoService) GetVideoByID(videoID uint64) (*model.Video, error) {
 
 	video, err := s.videoRepo.GetVideoCache(videoID)
 	if err == nil && video != nil {
-		fmt.Println("我从缓存里拿到数据了！")
+		logger.Log.WithField("video_id", videoID).Info("缓存读取成功！")
 		return video, nil
 	}
 	// 不是redis中没有，而是Redis本身出错了，应该记录日志并返回
