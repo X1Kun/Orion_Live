@@ -1,9 +1,0 @@
-POST /api/v1/users/register
-POST /api/v1/users/login
-POST /api/v1/videos
-POST /api/v1/videos/:videoID/comments
-POST /api/v1/comments/:commentID/replies
-POST /api/v1/videos/:videoID/comments?page=3&page_size=1
-POST /api/v1/videos/:videoID/golden_comment
-POST /api/v1/videos/:videoID/like
-DELETE /api/v1/videos/:videoID/like

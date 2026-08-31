@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop, "refactor/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Run static analysis
+        run: go vet ./...
+
+      - name: Compile packages and commands
+        run: go build ./...
+
+      - name: Validate Compose configuration
+        env:
+          DB_NAME: orion
+          DB_USER: orion
+          DB_PASSWORD: ci-only-placeholder
+          MYSQL_ROOT_PASSWORD: ci-only-root-placeholder
+          RABBITMQ_USER: orion
+          RABBITMQ_PASSWORD: ci-only-placeholder
+          JWT_SECRET_KEY: ci-only-placeholder-secret-at-least-32-characters
+        run: docker compose config --quiet
+
+      - name: Build container image
+        run: docker build --tag orion-live:ci .
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # The legacy history contains a known local-only database password.
+      # New commits are gated by scanning the current repository contents.
+      - name: Scan current files for secrets
+        uses: docker://zricethezav/gitleaks:v8.25.1
+        with:
+          args: dir /github/workspace --redact --no-banner

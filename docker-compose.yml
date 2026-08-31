@@ -1,213 +1,123 @@
-# docker-compose.yml
+name: orion-live
+
+x-app-environment: &app-environment
+  APP_ENV: development
+  HTTP_ADDRESS: :8080
+  DB_HOST: mysql
+  DB_PORT: "3306"
+  DB_USER: ${DB_USER:?set DB_USER in .env}
+  DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+  DB_NAME: ${DB_NAME:?set DB_NAME in .env}
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+  REDIS_DB: "0"
+  RABBITMQ_HOST: rabbitmq
+  RABBITMQ_PORT: "5672"
+  RABBITMQ_USER: ${RABBITMQ_USER:?set RABBITMQ_USER in .env}
+  RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in .env}
+  RABBITMQ_VHOST: /
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY in .env}
+  ACCESS_TOKEN_TTL: 15m
+  STARTUP_TIMEOUT: 15s
+  SHUTDOWN_TIMEOUT: 10s
 
 services:
-  api-server:
-    # 容器名字
-    container_name: api-server 
-    # 根据Dockerfile自建镜像，而不是拉取pre-build的镜像
+  api:
     build:
-      # 文件夹路径
       context: .
-      dockerfile: Dockerfile
-    # 宿主机和镜像的端口映射
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+    environment: *app-environment
     ports:
       - "8080:8080"
-    # 只有在mysql健康，redis和rabbitmq启动之后，在启动
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    init: true
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+    entrypoint: ["/usr/local/bin/orion-migrate"]
+    environment:
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_USER: ${DB_USER:?set DB_USER in .env}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      DB_NAME: ${DB_NAME:?set DB_NAME in .env}
     depends_on:
       mysql:
         condition: service_healthy
-      redis:
-        condition: service_started # Redis没有healthcheck，用started即可
-      rabbitmq:
-        condition: service_started
-    # 设置容器内部时区
-    environment:
-      - TZ=Asia/Shanghai
-    # 环境变量配置
-    env_file:
-      - .env
-    # 保证在一个网络环境下
-    networks:
-      - orion-net
-  
-  consumer:
-    container_name: consumer
-    build:
-      context: .
-      dockerfile: Dockerfile.consumer # 指定使用新的 Dockerfile
-    depends_on:
-      - mysql
-      - rabbitmq
-    environment:
-      - TZ=Asia/Shanghai
-    env_file:
-      - .env
-    networks:
-      - orion-net
-    restart: always 
-      
+    restart: "no"
+
   mysql:
-    # 拉取镜像
-    image: mysql:8.0
-    container_name: orion_mysql
-    restart: always
+    image: mysql:8.4.11
     environment:
-      - TZ=Asia/Shanghai
-    env_file:
-    - .env
+      MYSQL_DATABASE: ${DB_NAME:?set DB_NAME in .env}
+      MYSQL_USER: ${DB_USER:?set DB_USER in .env}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
     ports:
       - "3306:3306"
-    # 保证数据持久化，让mysql将数据放在文件夹中
     volumes:
       - mysql_data:/var/lib/mysql
-    # 告诉docker周期性运行mysqladmin，ping检查健康状况，和api-server中的condition: service_healthy对应
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-pzhengxikun"]
-      # 周期
-      interval: 10s
-      # 5秒没收到，就代表挂了
-      timeout: 5s
-      # 重试5次
-      retries: 5
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
       start_period: 20s
-    networks:
-      - orion-net
-
-  mysql-exporter:
-    image: prom/mysqld-exporter
-    container_name: mysql-exporter
-    # 会覆盖镜像的原始command配置，告诉exporter去哪找数据库
-    command: --collect.global_status --collect.global_variables --collect.slave_status --web.listen-address=:9104 --config.my-cnf=/etc/.my.cnf
-    # 因为用environment变量会出bug，所以用command和本地文件替换
-    # environment:
-    #   DATA_SOURCE_NAME: 'root:zhengxikun@tcp(mysql:3306)/'
-    ports:
-      - "9104:9104"  # 暴露 exporter 默认端口
-    volumes:
-      - ./my.cnf:/etc/.my.cnf
-    environment:
-      - TZ=Asia/Shanghai
-    networks:
-      - orion-net
-    depends_on:
-      - mysql
+    restart: unless-stopped
 
   redis:
-    image: redis:7.0-alpine
-    container_name: orion_redis
-    restart: always
+    image: redis:7.4.11-alpine
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    environment:
-      - TZ=Asia/Shanghai
-    networks:
-      - orion-net
-
-  redis-exporter:
-    image: oliver006/redis_exporter:latest
-    container_name: redis-exporter
-    # 通过 command-line flags 告诉 Exporter 去哪里找 Redis
-    command: --redis.addr=redis:6379
-    ports:
-      - "9121:9121" # Exporter 默认的 metrics 端口
-    environment:
-      - TZ=Asia/Shanghai
-    networks:
-      - orion-net
-    depends_on:
-      - redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
 
   rabbitmq:
-    image: rabbitmq:3.11-management-alpine
-    container_name: orion_rabbitmq
-    restart: always
+    image: rabbitmq:4.3.5-management-alpine
     environment:
-      - TZ=Asia/Shanghai
-    env_file:
-      - .env
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?set RABBITMQ_USER in .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in .env}
     ports:
-      - "5672:5672"   # 客户端连接端口
-      - "15672:15672" # 管理后台UI端口
-    networks:
-      - orion-net
-
-  rabbitmq-exporter:
-    image: kbudde/rabbitmq-exporter:latest
-    container_name: rabbitmq-exporter
-    environment:
-      - TZ=Asia/Shanghai
-      # URL 指向 RabbitMQ 的管理插件端口
-      - RABBIT_URL=http://rabbitmq:15672 
-    env_file:
-      - .env
-    ports:
-      - "9419:9419" # Exporter 默认的 metrics 端口
-    networks:
-      - orion-net
-    depends_on:
-      - rabbitmq
-
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    ports:
-      - "9090:9090"
+      - "5672:5672"
+      - "15672:15672"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml 
-    environment:
-      - TZ=Asia/Shanghai
-    networks:
-      - orion-net
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
 
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana # 持久化 Grafana 数据
-    depends_on:
-      - prometheus
-    environment:
-      - TZ=Asia/Shanghai
-    networks:
-      - orion-net
-
-  loki:
-    image: grafana/loki:2.9.0
-    container_name: loki
-    ports:
-      - "3100:3100"
-    volumes:
-      - ./loki-config.yml:/etc/loki/local-config.yaml
-      - loki_data:/loki  # <<< 新增这一行，将命名卷挂载到Loki的工作目录
-    command: -config.file=/etc/loki/local-config.yaml
-    networks:
-      - orion-net
-
-  promtail:
-    image: grafana/promtail:2.9.0
-    container_name: promtail
-    volumes:
-      - ./promtail-config.yml:/etc/promtail/config.yaml
-      # 关键：需要挂载 docker sock，才能读取其他容器的日志
-      - /var/run/docker.sock:/var/run/docker.sock
-    command: -config.file=/etc/promtail/config.yaml
-    networks:
-      - orion-net
-
-
-# 网络定义
-networks:
-  orion-net:
-    # 桥接模式，容器间直接访问容器名就能通信
-    driver: bridge
-
-# 只有命名卷（持久化数据）才需要声明，而绑定挂载（.yml）不需要声明
 volumes:
   mysql_data:
   redis_data:
-  grafana_data:
-  loki_data:
+  rabbitmq_data:

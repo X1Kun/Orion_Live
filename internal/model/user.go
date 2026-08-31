@@ -1,7 +1,7 @@
 package model
 
 type User struct {
-	BaseModel        // 包括 ID, CreatedAt, UpdatedAt, DeleteAt
-	Username  string `gorm:"unique;not null"`
-	Password  string `gorm:"not null"`
+	BaseModel
+	Username     string `gorm:"size:64;uniqueIndex;not null"`
+	PasswordHash string `gorm:"size:60;not null"`
 }

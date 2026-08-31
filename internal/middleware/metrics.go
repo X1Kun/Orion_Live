@@ -1,10 +1,10 @@
 package middleware
 
 import (
-	"Orion_Live/internal/metrics"
 	"strconv"
 	"time"
 
+	"github.com/X1Kun/orion-live/internal/metrics"
 	"github.com/gin-gonic/gin"
 )
 
@@ -19,9 +19,11 @@ func Metrics() gin.HandlerFunc {
 		duration := time.Since(start).Seconds()
 		// 获取本次请求的 HTTP 响应状态码（如 200, 404, 500）
 		status := strconv.Itoa(c.Writer.Status())
-		// c.Request.URL.Path会返回/videos/1和/videos/2等
-		// c.FullPath()返回注册路由时的模板字符串，/videos/:video_id，这才是对的
+		// FullPath keeps metric labels bounded by using the registered route template.
 		path := c.FullPath()
+		if path == "" {
+			path = "unmatched"
+		}
 		method := c.Request.Method
 		// 根据 path 和 method 找到对应直方图，并将“耗时”输入
 		metrics.HTTPRequestDuration.WithLabelValues(path, method).Observe(duration)
