@@ -36,6 +36,7 @@ jobs:
           DB_USER: orion
           DB_PASSWORD: ci-only-placeholder
           MYSQL_ROOT_PASSWORD: ci-only-root-placeholder
+          REDIS_PASSWORD: ci-only-placeholder
           RABBITMQ_USER: orion
           RABBITMQ_PASSWORD: ci-only-placeholder
           JWT_SECRET_KEY: ci-only-placeholder-secret-at-least-32-characters
