@@ -1,84 +1,102 @@
 package main
 
 import (
-	"Orion_Live/internal/data"
-	"Orion_Live/internal/handler"
-	"Orion_Live/internal/model"
-	"Orion_Live/internal/repository"
-	"Orion_Live/internal/router"
-	"Orion_Live/internal/service"
-	"Orion_Live/internal/websocket"
-	"Orion_Live/pkg/logger"
-	my "Orion_Live/pkg/mysql"
-	"Orion_Live/pkg/rabbitmq"
-	"Orion_Live/pkg/redis"
-	"log"
+	"context"
+	"errors"
+	"net/http"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/X1Kun/orion-live/internal/config"
+	"github.com/X1Kun/orion-live/internal/handler"
+	"github.com/X1Kun/orion-live/internal/health"
+	"github.com/X1Kun/orion-live/internal/repository"
+	"github.com/X1Kun/orion-live/internal/router"
+	"github.com/X1Kun/orion-live/internal/service"
+	"github.com/X1Kun/orion-live/pkg/logger"
+	mysqlclient "github.com/X1Kun/orion-live/pkg/mysql"
+	rabbitclient "github.com/X1Kun/orion-live/pkg/rabbitmq"
+	redisclient "github.com/X1Kun/orion-live/pkg/redis"
+	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	// 初始化logger (logger通常最先初始化)
-	logger.InitLogger()
-
-	// 初始化数据库
-	db, err := my.InitMySQL()
+	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("无法初始化数据库: %v", err)
+		logger.Log.WithError(err).Fatal("invalid configuration")
 	}
-	// 获取通用数据库对象并延迟关闭
+	logger.InitLogger(cfg.Environment)
+	if cfg.Environment != "development" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
+	startupCtx, cancelStartup := context.WithTimeout(context.Background(), cfg.StartupTimeout)
+	defer cancelStartup()
+
+	db, err := mysqlclient.Open(startupCtx, cfg.MySQL)
+	if err != nil {
+		logger.Log.WithError(err).Fatal("initialize mysql")
+	}
 	sqlDB, err := db.DB()
 	if err != nil {
-		log.Fatalf("无法获取底层的sql.DB: %v", err)
+		logger.Log.WithError(err).Fatal("access mysql connection pool")
 	}
 	defer sqlDB.Close()
-	logger.Log.Info("数据库连接成功")
 
-	// 初始化Redis
-	redisClient, err := redis.InitRedis()
+	redis, err := redisclient.Open(startupCtx, cfg.Redis)
 	if err != nil {
-		log.Fatalf("无法初始化Redis: %v", err)
+		logger.Log.WithError(err).Fatal("initialize redis")
 	}
-	defer redisClient.Close()
-	logger.Log.Info("Redis连接成功")
+	defer redis.Close()
 
-	// 初始化RabbitMQ
-	rabbitMQConn, err := rabbitmq.InitRabbitMQ()
+	rabbitMQ, err := rabbitclient.Open(startupCtx, cfg.RabbitMQ)
 	if err != nil {
-		log.Fatalf("无法初始化RabbitMQ: %v", err)
+		logger.Log.WithError(err).Fatal("initialize rabbitmq")
 	}
-	defer rabbitMQConn.Close()
-	logger.Log.Info("RabbitMQ连接成功")
+	defer rabbitMQ.Close()
 
-	// db.AutoMigrate(),没有这个表就创建,没有属性列则创建列,没有约束则增加约束;不会主动删除和修改
-	err = db.AutoMigrate(&model.User{}, &model.Video{}, &model.Like{}, &model.Comment{})
-	if err != nil {
-		logger.Log.Fatalf("数据库迁移失败: %v", err)
-	}
-	logger.Log.Info("数据库迁移成功")
-
+	checker := health.NewChecker(sqlDB, redis, rabbitMQ)
 	userRepo := repository.NewUserRepository(db)
-	videoRepo := repository.NewVideoRepository(db, redisClient)
-	commentRepo := repository.NewCommentRepository(db)
-
-	uow := data.NewUnitOfWork(db, videoRepo, commentRepo)
-
-	userService := service.NewUserService(userRepo)
-	videoService := service.NewVideoService(videoRepo)
-	likeService := service.NewLikeService(videoRepo, rabbitMQConn)
-	commentService := service.NewCommentService(commentRepo, videoRepo, uow, redisClient, rabbitMQConn)
-
-	userHandler := handler.NewUserHandler(userService)
-	videoHandler := handler.NewVideoHandler(videoService)
-	likeHandler := handler.NewLikeHandler(likeService)
-	commentHandler := handler.NewCommentHandler(commentService, commentRepo, videoRepo)
-	hub := websocket.NewHub()
-	go hub.Run()
-	wsHandler := handler.NewWebSocketHandler(hub, videoService)
-
-	r := router.SetupRouter(userHandler, videoHandler, likeHandler, commentHandler, *wsHandler)
-	logger.Log.Println("服务器将在: 8080端口启动")
-
-	if err := r.Run(":8080"); err != nil {
-		logger.Log.Fatalf("服务器启动失败: %v", err)
+	userService := service.NewUserService(userRepo, cfg.JWTSecret, cfg.AccessTokenTTL)
+	engine := router.New(
+		handler.NewUserHandler(userService),
+		handler.NewHealthHandler(checker, time.Second),
+		cfg.JWTSecret,
+	)
+	server := &http.Server{
+		Addr:              cfg.HTTPAddress,
+		Handler:           engine,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
-	logger.Log.Println("服务器成功在: 8080端口启动")
+
+	serverErr := make(chan error, 1)
+	go func() {
+		logger.Log.WithField("address", cfg.HTTPAddress).Info("api server started")
+		serverErr <- server.ListenAndServe()
+	}()
+
+	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	select {
+	case <-signalCtx.Done():
+		logger.Log.Info("shutdown signal received")
+	case err := <-serverErr:
+		if !errors.Is(err, http.ErrServerClosed) {
+			logger.Log.WithError(err).Fatal("api server stopped unexpectedly")
+		}
+	}
+
+	checker.SetDraining()
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+	defer cancelShutdown()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		logger.Log.WithError(err).Error("graceful shutdown did not complete")
+		_ = server.Close()
+	}
+	logger.Log.Info("api server stopped")
 }

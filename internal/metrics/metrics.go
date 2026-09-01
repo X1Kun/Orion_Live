@@ -28,12 +28,4 @@ var (
 		},
 		[]string{"path", "method"},
 	)
-
-	// ActiveWebsocketConnections: 一个仪表盘(Gauge)，可以增减，用于监控当前活跃的WebSocket连接数
-	ActiveWebsocketConnections = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "orion_active_websocket_connections",
-			Help: "Current number of active websocket connections.",
-		},
-	)
 )
