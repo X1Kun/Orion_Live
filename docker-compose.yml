@@ -19,8 +19,8 @@ x-app-environment: &app-environment
   RABBITMQ_VHOST: /
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY in .env}
   ACCESS_TOKEN_TTL: 15m
-  STARTUP_TIMEOUT: 15s
-  SHUTDOWN_TIMEOUT: 10s
+  DEPENDENCY_INIT_TIMEOUT: 15s
+  HTTP_SHUTDOWN_TIMEOUT: 10s
 
 services:
   api:
