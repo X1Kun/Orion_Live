@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master, develop, "refactor/**"]
+    branches: [main]
   pull_request:
+    branches: [main]
 
 permissions:
   contents: read
@@ -26,6 +27,9 @@ jobs:
 
       - name: Run static analysis
         run: go vet ./...
+
+      - name: Run tests
+        run: go test ./...
 
       - name: Compile packages and commands
         run: go build ./...

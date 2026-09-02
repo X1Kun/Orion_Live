@@ -65,18 +65,18 @@ func main() {
 		cfg.JWTSecret,
 	)
 	server := &http.Server{
-		Addr:              cfg.HTTPAddress,
+		Addr:              cfg.HTTP.Address,
 		Handler:           engine,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    1 << 20,
+		ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout,
+		ReadTimeout:       cfg.HTTP.ReadTimeout,
+		WriteTimeout:      cfg.HTTP.WriteTimeout,
+		IdleTimeout:       cfg.HTTP.IdleTimeout,
+		MaxHeaderBytes:    cfg.HTTP.MaxHeaderBytes,
 	}
 
 	serverErr := make(chan error, 1)
 	go func() {
-		logger.Log.WithField("address", cfg.HTTPAddress).Info("api server started")
+		logger.Log.WithField("address", cfg.HTTP.Address).Info("api server started")
 		serverErr <- server.ListenAndServe()
 	}()
 
@@ -92,7 +92,7 @@ func main() {
 	}
 
 	checker.SetDraining()
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), cfg.HTTPShutdownTimeout)
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
 	defer cancelShutdown()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Log.WithError(err).Error("graceful shutdown did not complete")
