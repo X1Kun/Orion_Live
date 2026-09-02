@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	cfg, err := config.LoadMySQL()
+	cfg, err := config.LoadMigration()
 	if err != nil {
 		logger.Log.WithError(err).Fatal("invalid configuration")
 	}

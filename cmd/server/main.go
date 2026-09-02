@@ -31,7 +31,7 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	startupCtx, cancelStartup := context.WithTimeout(context.Background(), cfg.StartupTimeout)
+	startupCtx, cancelStartup := context.WithTimeout(context.Background(), cfg.DependencyInitTimeout)
 	defer cancelStartup()
 
 	db, err := mysqlclient.Open(startupCtx, cfg.MySQL)
@@ -92,7 +92,7 @@ func main() {
 	}
 
 	checker.SetDraining()
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), cfg.HTTPShutdownTimeout)
 	defer cancelShutdown()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Log.WithError(err).Error("graceful shutdown did not complete")
