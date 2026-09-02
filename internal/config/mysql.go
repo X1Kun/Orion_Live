@@ -1,10 +1,12 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
+	"time"
 )
 
 type MySQL struct {
@@ -13,9 +15,34 @@ type MySQL struct {
 	User     string
 	Password string
 	Database string
+
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
 }
 
-func loadMySQL() MySQL {
+func loadMySQL() (MySQL, error) {
+	cfg := loadMySQLConnection()
+	maxOpenConns, err := envInt("DB_MAX_OPEN_CONNS", 30)
+	if err != nil {
+		return MySQL{}, err
+	}
+	maxIdleConns, err := envInt("DB_MAX_IDLE_CONNS", 10)
+	if err != nil {
+		return MySQL{}, err
+	}
+	connMaxLifetime, err := envDuration("DB_CONN_MAX_LIFETIME", 30*time.Minute)
+	if err != nil {
+		return MySQL{}, err
+	}
+
+	cfg.MaxOpenConns = maxOpenConns
+	cfg.MaxIdleConns = maxIdleConns
+	cfg.ConnMaxLifetime = connMaxLifetime
+	return cfg, nil
+}
+
+func loadMySQLConnection() MySQL {
 	return MySQL{
 		Host:     env("DB_HOST", "127.0.0.1"),
 		Port:     env("DB_PORT", "3306"),
@@ -26,13 +53,26 @@ func loadMySQL() MySQL {
 }
 
 func LoadMigration() (MySQL, error) {
-	cfg := loadMySQL()
+	cfg := loadMySQLConnection()
 	if err := validateRequired(map[string]string{
 		"DB_USER": cfg.User, "DB_PASSWORD": cfg.Password, "DB_NAME": cfg.Database,
 	}); err != nil {
 		return MySQL{}, err
 	}
 	return cfg, nil
+}
+
+func (c MySQL) validate() error {
+	if c.MaxOpenConns <= 0 {
+		return errors.New("DB_MAX_OPEN_CONNS must be positive")
+	}
+	if c.MaxIdleConns < 0 || c.MaxIdleConns > c.MaxOpenConns {
+		return errors.New("DB_MAX_IDLE_CONNS must be between 0 and DB_MAX_OPEN_CONNS")
+	}
+	if c.ConnMaxLifetime <= 0 {
+		return errors.New("DB_CONN_MAX_LIFETIME must be positive")
+	}
+	return nil
 }
 
 func (c MySQL) DSN(multiStatements bool) string {

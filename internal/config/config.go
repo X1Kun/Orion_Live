@@ -8,27 +8,29 @@ import (
 
 type Config struct {
 	Environment           string
-	HTTPAddress           string
 	DependencyInitTimeout time.Duration
-	HTTPShutdownTimeout   time.Duration
 	JWTSecret             string
 	AccessTokenTTL        time.Duration
+	HTTP                  HTTP
 	MySQL                 MySQL
 	Redis                 Redis
 	RabbitMQ              RabbitMQ
 }
 
 func Load() (Config, error) {
-	mysqlConfig := loadMySQL()
+	httpConfig, err := loadHTTP()
+	if err != nil {
+		return Config{}, err
+	}
+	mysqlConfig, err := loadMySQL()
+	if err != nil {
+		return Config{}, err
+	}
 	redisConfig, err := loadRedis()
 	if err != nil {
 		return Config{}, err
 	}
 	rabbitMQConfig := loadRabbitMQ()
-	httpShutdownTimeout, err := envDuration("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
 	dependencyInitTimeout, err := envDuration("DEPENDENCY_INIT_TIMEOUT", 10*time.Second)
 	if err != nil {
 		return Config{}, err
@@ -40,11 +42,10 @@ func Load() (Config, error) {
 
 	cfg := Config{
 		Environment:           env("APP_ENV", "development"),
-		HTTPAddress:           env("HTTP_ADDRESS", ":8080"),
 		DependencyInitTimeout: dependencyInitTimeout,
-		HTTPShutdownTimeout:   httpShutdownTimeout,
 		JWTSecret:             os.Getenv("JWT_SECRET_KEY"),
 		AccessTokenTTL:        accessTokenTTL,
+		HTTP:                  httpConfig,
 		MySQL:                 mysqlConfig,
 		Redis:                 redisConfig,
 		RabbitMQ:              rabbitMQConfig,
@@ -61,6 +62,7 @@ func (c Config) Validate() error {
 		"DB_USER":           c.MySQL.User,
 		"DB_PASSWORD":       c.MySQL.Password,
 		"DB_NAME":           c.MySQL.Database,
+		"HTTP_ADDRESS":      c.HTTP.Address,
 		"JWT_SECRET_KEY":    c.JWTSecret,
 		"REDIS_PASSWORD":    c.Redis.Password,
 		"RABBITMQ_USER":     c.RabbitMQ.User,
@@ -71,8 +73,17 @@ func (c Config) Validate() error {
 	if len(c.JWTSecret) < 32 {
 		return errors.New("JWT_SECRET_KEY must contain at least 32 characters")
 	}
-	if c.HTTPShutdownTimeout <= 0 || c.DependencyInitTimeout <= 0 || c.AccessTokenTTL <= 0 {
-		return errors.New("configured durations must be positive")
+	if c.DependencyInitTimeout <= 0 {
+		return errors.New("DEPENDENCY_INIT_TIMEOUT must be positive")
+	}
+	if c.AccessTokenTTL <= 0 {
+		return errors.New("ACCESS_TOKEN_TTL must be positive")
+	}
+	if err := c.HTTP.validate(); err != nil {
+		return err
+	}
+	if err := c.MySQL.validate(); err != nil {
+		return err
 	}
 	if c.Redis.Database < 0 {
 		return errors.New("REDIS_DB must not be negative")

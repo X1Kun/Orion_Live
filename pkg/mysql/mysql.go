@@ -32,9 +32,9 @@ func Open(ctx context.Context, cfg config.MySQL) (*gorm.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("access mysql connection pool: %w", err)
 	}
-	sqlDB.SetMaxOpenConns(30)
-	sqlDB.SetMaxIdleConns(10)
-	sqlDB.SetConnMaxLifetime(30 * time.Minute)
+	sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
+	sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
+	sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 	if err := sqlDB.PingContext(ctx); err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("ping mysql: %w", err)
